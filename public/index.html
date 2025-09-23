@@ -104,12 +104,26 @@
             border-radius: 25px;
             cursor: pointer;
         }
+        .room-info {
+            margin-top: 10px;
+            font-size: 14px;
+        }
+
+        .typing-indicator {
+            padding: 10px 20px;
+            font-style: italic;
+            color: #666;
+            min-height: 20px;
+        }
     </style>
 </head>
 <body>
     <div class="chat-container">
         <div class="chat-header">
             <h2>💬 ChatChat - Chat Real-time</h2>
+            <div class="room-info">
+                <span>Phòng: <strong id="current-room">general</strong></span>
+            </div>
         </div>
         
         <div class="username-input">
@@ -118,6 +132,8 @@
         </div>
         
         <div class="messages" id="messages"></div>
+        
+        <div class="typing-indicator" id="typing-indicator"></div>
         
         <div class="message-input">
             <input type="text" id="message-input" placeholder="Nhập tin nhắn..." disabled>
@@ -129,6 +145,7 @@
     <script>
         let socket;
         let username = '';
+        let currentRoom = 'general'; // Thêm dòng này
         
         // Kết nối tới server
         socket = io();
@@ -149,6 +166,12 @@
                 // Ẩn phần nhập username
                 document.querySelector('.username-input').style.display = 'none';
                 
+                // Join room
+                socket.emit('join_room', {
+                    username: username,
+                    room: currentRoom
+                });
+                
                 // Focus vào ô nhập tin nhắn
                 messageInput.focus();
             }
@@ -162,7 +185,8 @@
             if (message) {
                 socket.emit('send_message', {
                     username: username,
-                    message: message
+                    message: message,
+                    room: currentRoom  // Thêm room
                 });
                 messageInput.value = '';
             }
@@ -171,6 +195,27 @@
         // Lắng nghe tin nhắn từ server
         socket.on('receive_message', (data) => {
             addMessage(data);
+        });
+        
+        // Lắng nghe user joined
+        socket.on('user_joined', (data) => {
+            addSystemMessage(data.message);
+        });
+
+        // Lắng nghe typing
+        socket.on('user_typing', (data) => {
+            showTypingIndicator(data);
+        });
+        
+        // Nhận danh sách tin nhắn cũ khi join phòng
+        socket.on('load_messages', (messages) => {
+            messages.forEach((m) => {
+                addMessage({
+                    username: m.username,
+                    message: m.message,
+                    timestamp: m.createdAt
+                });
+            });
         });
         
         // Hàm thêm tin nhắn vào giao diện
@@ -188,11 +233,53 @@
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
         
+        // Hàm hiển thị tin nhắn hệ thống
+        function addSystemMessage(message) {
+            const messagesContainer = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message system';
+            messageDiv.style.textAlign = 'center';
+            messageDiv.style.fontStyle = 'italic';
+            messageDiv.style.color = '#666';
+            messageDiv.textContent = message;
+            
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Hàm hiển thị typing indicator
+        function showTypingIndicator(data) {
+            const typingDiv = document.getElementById('typing-indicator');
+            if (data.isTyping) {
+                typingDiv.textContent = `${data.username} đang nhập...`;
+            } else {
+                typingDiv.textContent = '';
+            }
+        }
+        
         // Gửi tin nhắn khi nhấn Enter
         document.getElementById('message-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendMessage();
             }
+        });
+
+        // Thêm typing khi nhập
+        document.getElementById('message-input').addEventListener('input', () => {
+            socket.emit('typing', {
+                username: username,
+                room: currentRoom,
+                isTyping: true
+            });
+            
+            // Clear typing sau 1 giây
+            setTimeout(() => {
+                socket.emit('typing', {
+                    username: username,
+                    room: currentRoom,
+                    isTyping: false
+                });
+            }, 1000);
         });
     </script>
 </body>
