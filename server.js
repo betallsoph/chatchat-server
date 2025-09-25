@@ -1,7 +1,6 @@
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
-const path = require('path');
 const cors = require('cors');
 const app = express();
 const mongoose = require('mongoose');
@@ -10,90 +9,129 @@ const Message = require('./models/Message');
 
 const server = http.createServer(app);
 
+// CORS configuration - whitelist specific origins
+const allowedOrigins = [
+  'http://localhost:5173',           // React dev server
+  'https://your-app.vercel.app'      // Production domain (update as needed)
+];
+
+// Allow environment override
+const CLIENT_ORIGINS = (process.env.CLIENT_ORIGINS || '')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+if (CLIENT_ORIGINS.length) {
+  allowedOrigins.push(...CLIENT_ORIGINS);
+}
+
 const io = socketIo(server, {
     cors: {
-        origin: '*',
+        origin: allowedOrigins,
+        credentials: true,
         methods: ['GET', 'POST']
     }
 });
 
-app.use(cors());
+// Firebase auth for Socket.IO
+const admin = require('./services/firebaseAdmin');
+io.use(async (socket, next) => {
+  try {
+    const token = socket.handshake.auth && socket.handshake.auth.token;
+    if (!token) return next(new Error('Missing Firebase token'));
+    if (!admin.apps.length) return next(new Error('Firebase Admin chưa cấu hình'));
+    const decoded = await admin.auth().verifyIdToken(token);
+    socket.data.user = decoded; // attach uid/email
+    return next();
+  } catch (err) {
+    return next(new Error('Invalid Firebase token'));
+  }
+});
+
+app.use(cors({
+  origin: allowedOrigins,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Authorization','Content-Type'],
+  credentials: true
+}));
+
+// BẮT BUỘC: Xử lý preflight OPTIONS
+app.options(/.*/, cors({
+  origin: allowedOrigins,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Authorization','Content-Type'],
+  credentials: true
+}));
 app.use(express.json());
 
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// Route chính
+// Route chính (không dùng static HTML)
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.json({ name: 'chatchat_server', status: 'ok' });
+});
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
 });
 
 // REST routes
 app.use('/api/chat', require('./routes/chat'));
+app.use('/api/auth', require('./routes/auth'));
+
+// GET /messages - Lịch sử tin nhắn (YÊU CẦU TOKEN)
+const firebaseAuth = require('./middleware/firebaseAuth');
+app.get('/messages', firebaseAuth, async (_req, res) => {
+  try {
+    const messages = await Message.find()
+      .sort({ createdAt: 1 })
+      .limit(200)
+      .lean();
+    
+    res.json(messages.map(msg => ({
+      _id: msg._id.toString(),
+      userId: msg.userId,
+      displayName: msg.displayName,
+      text: msg.text,
+      createdAt: msg.createdAt.toISOString()
+    })));
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch messages' });
+  }
+});
 
 // Socket.io connection
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  //user join phòng
-  socket.on('join_room', async (data) => {
-    socket.join(data.room);
-    socket.broadcast.to(data.room).emit('user_joined', {
-      username: data.username,
-      message: `${data.username} đã tham gia phòng ${data.room}`
-    });
-    console.log(`User ${data.username} joined room ${data.room}`);
-    
-    // Load tin nhắn cũ khi join phòng
+  // Global chat only
+
+  // message:send -> message:new (global chat)
+  socket.on('message:send', async ({ text }) => {
     try {
-      const messages = await Message.find({ room: data.room })
-        .sort({ createdAt: 1 })
-        .limit(50); // Chỉ load 50 tin nhắn gần nhất
+      const user = socket.data && socket.data.user ? socket.data.user : null;
+      if (!user || typeof text !== 'string' || !text.trim()) return;
       
-      socket.emit('load_messages', messages);
+      // Lưu vào MongoDB với schema mới
+      const message = await Message.create({
+        userId: user.uid,
+        displayName: user.name || user.email || 'User',
+        text: text.trim(),
+        createdAt: new Date()
+      });
+      
+      // Gửi cho tất cả clients
+      io.emit('message:new', {
+        _id: message._id.toString(),
+        userId: message.userId,
+        displayName: message.displayName,
+        text: message.text,
+        createdAt: message.createdAt.toISOString()
+      });
     } catch (error) {
-      console.error('Error loading messages:', error);
+      console.error('Error sending message:', error);
     }
   });
 
-  //user leave phòng
-  socket.on('leave_room', (roomId) => {
-    socket.leave(roomId);
-    console.log(`User ${socket.id} left room ${roomId}`);
-  });
-
-  // Khi có tin nhắn mới
-  socket.on('send_message', async (data) => {
-    try {
-      // Lưu tin nhắn vào database
-      const newMessage = new Message({
-        username: data.username,
-        message: data.message,
-        room: data.room
-      });
-      
-      await newMessage.save();
-      
-      // Gửi tin nhắn tới tất cả user trong phòng
-      io.to(data.room).emit('receive_message', {
-        username: data.username,
-        message: data.message,
-        room: data.room,
-        timestamp: new Date()
-      });
-    } catch (error) {
-      console.error('Error saving message:', error);
-    }
-  });
-
-  //typing
-  socket.on('typing', (data) => {
-    socket.broadcast.to(data.room).emit('user_typing', {
-      username: data.username,
-      isTyping: data.isTyping,
-      message: `${data.username} đang gõ...`
-    });
-  });
+  // Remove room-based handlers (global chat only)
 
   // Khi user disconnect
   socket.on('disconnect', () => {

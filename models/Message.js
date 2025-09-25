@@ -1,17 +1,34 @@
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
+  userId: { 
+    type: String, 
+    required: true 
+  },
+  displayName: { 
+    type: String 
+  },
+  text: { 
+    type: String, 
+    required: true 
+  },
+  // Legacy fields for backward compatibility
+  uid: {
+    type: String,
+    default: null
+  },
   username: {
     type: String,
-    required: true
+    required: false
   },
   message: {
     type: String,
-    required: true
+    required: false
   },
   room: {
     type: String,
-    required: true
+    required: false,
+    default: 'general'
   }
 }, {
   timestamps: true
