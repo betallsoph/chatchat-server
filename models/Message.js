@@ -12,6 +12,43 @@ const messageSchema = new mongoose.Schema({
     type: String, 
     required: true 
   },
+  isEdited: {
+    type: Boolean,
+    default: false
+  },
+  isDeleted: {
+    type: Boolean,
+    default: false
+  },
+  deletedAt: {
+    type: Date,
+    default: null
+  },
+  // NEW: Image upload fields - lưu base64 string trong MongoDB  
+  hasImage: {
+    type: Boolean,
+    default: false
+  },
+  imageData: {
+    type: String,
+    default: null // 🔥 Lưu base64 string trực tiếp
+  },
+  imageFileName: {
+    type: String,
+    default: null
+  },
+  imageSize: {
+    type: Number,
+    default: null
+  },
+  imageMimeType: {
+    type: String,
+    default: null
+  },
+  imageUploadedAt: {
+    type: Date,
+    default: null
+  },
   // Legacy fields for backward compatibility
   uid: {
     type: String,
